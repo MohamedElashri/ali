@@ -77,10 +77,10 @@ This will print a table of your current shell aliases, their commands, and the l
 ```bash
 Alias                Command                                                 Location                         
 -----                -------                                                 --------                         
-c                    clear                                                        /home/melashri/.bash_aliases                      
-count                find . -type f | wc -l                                       /home/melashri/.bash_aliases                      
-cpv                  rsync -ah --info=progress2                                   /home/melashri/.bash_aliases
-showdisk             echo "The disk usage is: $(df -h | awk '\''$NF=="/...*       /home/melashri/.bash_aliases                      
+c                    clear                                                        ~/.bash_aliases                      
+count                find . -type f | wc -l                                       ~/.bash_aliases                      
+cpv                  rsync -ah --info=progress2                                   ~/.bash_aliases
+showdisk             echo "The disk usage is: $(df -h | awk '\''$NF=="/...*       ~/.bash_aliases                      
 * indicates that the command has been truncated. Please refer to the source file for the full command.
 ```
 
