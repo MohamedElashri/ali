@@ -1,0 +1,134 @@
+#!/bin/bash
+
+# Define colors for improved readability
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'  # No color
+
+# Maximum length for commands before truncation
+MAX_CMD_LENGTH=50
+
+# Column width configuration
+COL1_WIDTH=20  # Alias column width
+COL2_WIDTH=60  # Command column width
+COL3_WIDTH=50  # Location column width
+
+# Flag to track if any command was truncated
+TRUNCATED_FLAG=0
+
+# Function to safely expand variables in a string
+safe_expand() {
+    eval echo "$1" 2>/dev/null || echo "$1"
+}
+
+# Function to recursively find sourced files
+find_sourced_files() {
+    local file=$1
+    local depth=$2
+    local max_depth=10  # Prevent infinite recursion
+    
+    if [[ $depth -gt $max_depth ]]; then
+        return
+    fi
+
+    if [[ -f $file ]]; then
+        echo "$file"
+        while IFS= read -r line; do
+            if [[ $line =~ ^[[:space:]]*(source|\.)[[:space:]]+(.+) ]]; then
+                local sourced_file=$(safe_expand "${BASH_REMATCH[2]}")
+                find_sourced_files "$sourced_file" $((depth + 1))
+            fi
+        done < "$file"
+    fi
+}
+
+# Function to find the source of an alias
+find_alias_source() {
+    local alias_name=$1
+    local shell_name=$(basename "$SHELL")
+    local rc_file
+
+    case "$shell_name" in
+        bash)
+            rc_file="$HOME/.bashrc"
+            ;;
+        zsh)
+            rc_file="$HOME/.zshrc"
+            ;;
+        *)
+            echo "Unknown shell"
+            return
+            ;;
+    esac
+
+    local all_files=$(find_sourced_files "$rc_file" 0)
+
+    for file in $all_files; do
+        if grep -q "alias $alias_name=" "$file" 2>/dev/null; then
+            echo "$file"
+            return
+        fi
+    done
+
+    echo "Runtime defined or unknown source"
+}
+
+# Function to extract aliases and their location from active aliases
+extract_active_aliases() {
+    # Source the main RC file to ensure all aliases are loaded
+    local shell_name=$(basename "$SHELL")
+    case "$shell_name" in
+        bash)
+            source "$HOME/.bashrc" 2>/dev/null
+            ;;
+        zsh)
+            source "$HOME/.zshrc" 2>/dev/null
+            ;;
+    esac
+
+    # Use a temporary file to store alias output
+    temp_file=$(mktemp)
+    alias > "$temp_file"
+
+    while IFS= read -r line; do
+        alias_name=$(echo "$line" | cut -d '=' -f 1 | awk '{print $2}')
+        alias_command=$(echo "$line" | cut -d '=' -f 2- | sed "s/^'\(.*\)'$/\1/")
+        
+        # Check if the command needs to be truncated
+        if [ ${#alias_command} -gt $MAX_CMD_LENGTH ]; then
+            alias_command="${alias_command:0:$MAX_CMD_LENGTH}...*"
+            TRUNCATED_FLAG=1  # Set the flag indicating truncation occurred
+        fi
+
+        # Try to determine the source of the alias
+        alias_location=$(find_alias_source "$alias_name")
+
+        # Print with aligned columns and colors
+        printf "${GREEN}%-${COL1_WIDTH}s${NC} ${YELLOW}%-${COL2_WIDTH}s${NC} ${RED}%-${COL3_WIDTH}s${NC}\n" \
+            "$alias_name" "$alias_command" "$alias_location"
+    done < "$temp_file"
+
+    # Clean up the temporary file
+    rm "$temp_file"
+}
+
+# Main function to process and print active aliases with locations
+process_aliases() {
+    # Print header with aligned columns
+    printf "${GREEN}%-${COL1_WIDTH}s${NC} ${YELLOW}%-${COL2_WIDTH}s${NC} ${RED}%-${COL3_WIDTH}s${NC}\n" \
+        "Alias" "Command" "Location"
+    printf "%-${COL1_WIDTH}s %-${COL2_WIDTH}s %-${COL3_WIDTH}s\n" \
+        "-----" "-------" "--------"
+
+    # Extract active aliases
+    extract_active_aliases
+
+    # If any command was truncated, print a message explaining the "*"
+    if [ $TRUNCATED_FLAG -eq 1 ]; then
+        echo -e "\n${YELLOW}* indicates that the command has been truncated. Please refer to the source file for the full command.${NC}"
+    fi
+}
+
+# Call the main function
+process_aliases
