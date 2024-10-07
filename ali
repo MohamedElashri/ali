@@ -74,6 +74,12 @@ find_alias_source() {
     echo "Runtime defined or unknown source"
 }
 
+# Function to replace home directory with ~
+replace_home_with_tilde() {
+    local home_path=$(eval echo ~)
+    echo "${1//$home_path/\~}"
+}
+
 # Function to extract aliases and their location from active aliases
 extract_active_aliases() {
     # Source the main RC file to ensure all aliases are loaded
@@ -103,6 +109,10 @@ extract_active_aliases() {
 
         # Try to determine the source of the alias
         alias_location=$(find_alias_source "$alias_name")
+        
+        # Replace home directory with ~ in alias_command and alias_location
+        alias_command=$(replace_home_with_tilde "$alias_command")
+        alias_location=$(replace_home_with_tilde "$alias_location")
 
         # Print with aligned columns and colors
         printf "${GREEN}%-${COL1_WIDTH}s${NC} ${YELLOW}%-${COL2_WIDTH}s${NC} ${RED}%-${COL3_WIDTH}s${NC}\n" \
