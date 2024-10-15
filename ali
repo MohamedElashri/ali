@@ -17,6 +17,16 @@ COL3_WIDTH=50  # Location column width
 # Flag to track if any command was truncated
 TRUNCATED_FLAG=0
 
+# Debug mode flag
+DEBUG_MODE=0
+
+# Debug function
+debug() {
+    if [ $DEBUG_MODE -eq 1 ]; then
+        echo -e "${YELLOW}DEBUG: $1${NC}" >&2
+    fi
+}
+
 # Function to safely expand variables in a string
 safe_expand() {
     eval echo "$1" 2>/dev/null || echo "$1"
@@ -34,27 +44,62 @@ find_sourced_files() {
 
     if [[ -f $file ]]; then
         echo "$file"
+        debug "Checking file for source commands: $file"
         while IFS= read -r line; do
             if [[ $line =~ ^[[:space:]]*(source|\.)[[:space:]]+(.+) ]]; then
                 local sourced_file=$(safe_expand "${BASH_REMATCH[2]}")
+                debug "Found sourced file: $sourced_file"
                 find_sourced_files "$sourced_file" $((depth + 1))
+            elif [[ $line =~ for[[:space:]]+config_file[[:space:]]+in[[:space:]]+([^;]+) ]]; then
+                local file_list="${BASH_REMATCH[1]}"
+                debug "Found config file for loop: $file_list"
+                eval "for f in $file_list; do
+                    if [[ -f \$f ]]; then
+                        debug \"Found config file in for loop: \$f\"
+                        echo \$f
+                        find_sourced_files \$f $((depth + 1))
+                    fi
+                done"
             fi
         done < "$file"
     fi
+}
+
+# Function to find all possible Zsh configuration files
+find_zsh_config_files() {
+    local initial_files=(
+        "$HOME/.zshrc"
+        "$HOME/.zprofile"
+        "$HOME/.zshenv"
+        "$HOME/.zlogin"
+    )
+    
+    local all_files=()
+    for file in "${initial_files[@]}"; do
+        if [[ -f "$file" ]]; then
+            all_files+=("$file")
+            all_files+=($(find_sourced_files "$file" 0))
+        fi
+    done
+
+    printf '%s\n' "${all_files[@]}" | sort -u
 }
 
 # Function to find the source of an alias
 find_alias_source() {
     local alias_name=$1
     local shell_name=$(basename "$SHELL")
-    local rc_file
+    local config_files=()
+
+    debug "Searching for alias: $alias_name"
+    debug "Current shell: $shell_name"
 
     case "$shell_name" in
-        bash)
-            rc_file="$HOME/.bashrc"
-            ;;
         zsh)
-            rc_file="$HOME/.zshrc"
+            config_files=($(find_zsh_config_files))
+            ;;
+        bash)
+            config_files=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
             ;;
         *)
             echo "Unknown shell"
@@ -62,15 +107,16 @@ find_alias_source() {
             ;;
     esac
 
-    local all_files=$(find_sourced_files "$rc_file" 0)
-
-    for file in $all_files; do
-        if grep -q "alias $alias_name=" "$file" 2>/dev/null; then
+    for file in "${config_files[@]}"; do
+        debug "Checking file: $file"
+        if grep -qP "^\s*(alias\s+${alias_name}=|${alias_name}\(\)\s*\{)" "$file" 2>/dev/null; then
+            debug "Found alias in file: $file"
             echo "$file"
             return
         fi
     done
 
+    debug "Alias not found in any config file"
     echo "Runtime defined or unknown source"
 }
 
@@ -82,25 +128,40 @@ replace_home_with_tilde() {
 
 # Function to extract aliases and their location from active aliases
 extract_active_aliases() {
-    # Source the main RC file to ensure all aliases are loaded
     local shell_name=$(basename "$SHELL")
-    case "$shell_name" in
-        bash)
-            source "$HOME/.bashrc" 2>/dev/null
-            ;;
-        zsh)
-            source "$HOME/.zshrc" 2>/dev/null
-            ;;
-    esac
+    
+    debug "Extracting aliases for shell: $shell_name"
+
+    # Source all possible config files
+    if [[ "$shell_name" == "zsh" ]]; then
+        local config_files=($(find_zsh_config_files))
+        for file in "${config_files[@]}"; do
+            debug "Sourcing file: $file"
+            source "$file" 2>/dev/null
+        done
+    else
+        source "$HOME/.bashrc" 2>/dev/null
+        source "$HOME/.bash_profile" 2>/dev/null
+        source "$HOME/.profile" 2>/dev/null
+    fi
 
     # Use a temporary file to store alias output
     temp_file=$(mktemp)
     alias > "$temp_file"
 
+    debug "Aliases stored in temporary file: $temp_file"
+
     while IFS= read -r line; do
-        alias_name=$(echo "$line" | cut -d '=' -f 1 | awk '{print $2}')
-        alias_command=$(echo "$line" | cut -d '=' -f 2- | sed "s/^'\(.*\)'$/\1/")
+        if [[ "$shell_name" == "zsh" ]]; then
+            alias_name=$(echo "$line" | awk -F'=' '{print $1}' | awk '{print $2}')
+            alias_command=$(echo "$line" | awk -F'=' '{$1=""; print substr($0,2)}' | sed "s/^'\(.*\)'$/\1/")
+        else
+            alias_name=$(echo "$line" | cut -d '=' -f 1 | awk '{print $2}')
+            alias_command=$(echo "$line" | cut -d '=' -f 2- | sed "s/^'\(.*\)'$/\1/")
+        fi
         
+        debug "Processing alias: $alias_name"
+
         # Check if the command needs to be truncated
         if [ ${#alias_command} -gt $MAX_CMD_LENGTH ]; then
             alias_command="${alias_command:0:$MAX_CMD_LENGTH}...*"
@@ -139,6 +200,20 @@ process_aliases() {
         echo -e "\n${YELLOW}* indicates that the command has been truncated. Please refer to the source file for the full command.${NC}"
     fi
 }
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -d|--debug)
+            DEBUG_MODE=1
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
 
 # Call the main function
 process_aliases
