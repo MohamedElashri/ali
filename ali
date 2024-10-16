@@ -46,32 +46,59 @@ find_sourced_files() {
         echo "$file"
         debug "Checking file for source commands: $file"
         while IFS= read -r line; do
-            if [[ $line =~ ^[[:space:]]*(source|\.)[[:space:]]+(.+) ]]; then
-                local sourced_file=$(safe_expand "${BASH_REMATCH[2]}")
+            # Look for source, . or .. commands
+            if [[ $line =~ ^[[:space:]]*(source|\.|\.\.)[[:space:]]+([^ ]+) ]]; then
+                local sourced_file="${BASH_REMATCH[2]}"
+                sourced_file=$(safe_expand "$sourced_file")
                 debug "Found sourced file: $sourced_file"
-                find_sourced_files "$sourced_file" $((depth + 1))
-            elif [[ $line =~ for[[:space:]]+config_file[[:space:]]+in[[:space:]]+([^;]+) ]]; then
+                # Handle relative paths
+                if [[ ! "$sourced_file" = /* ]]; then
+                    sourced_file="$(dirname "$file")/$sourced_file"
+                fi
+                # Check if the file exists, even without extension
+                if [[ -f "$sourced_file" ]]; then
+                    find_sourced_files "$sourced_file" $((depth + 1))
+                else
+                    # Try adding common extensions if the file doesn't exist
+                    for ext in "" ".sh" ".bash" ".zsh"; do
+                        if [[ -f "${sourced_file}${ext}" ]]; then
+                            find_sourced_files "${sourced_file}${ext}" $((depth + 1))
+                            break
+                        fi
+                    done
+                fi
+            # Look for common patterns of file inclusion in for loops
+            elif [[ $line =~ for[[:space:]]+[[:alnum:]_]+[[:space:]]+in[[:space:]]+(.*) ]]; then
                 local file_list="${BASH_REMATCH[1]}"
-                debug "Found config file for loop: $file_list"
-                eval "for f in $file_list; do
-                    if [[ -f \$f ]]; then
-                        debug \"Found config file in for loop: \$f\"
-                        echo \$f
-                        find_sourced_files \$f $((depth + 1))
+                debug "Found potential file list in loop: $file_list"
+                for word in $file_list; do
+                    local potential_file=$(safe_expand "$word")
+                    if [[ -f "$potential_file" ]]; then
+                        debug "Found potential file in loop: $potential_file"
+                        find_sourced_files "$potential_file" $((depth + 1))
                     fi
-                done"
+                done
             fi
         done < "$file"
     fi
 }
 
-# Function to find all possible Zsh configuration files
-find_zsh_config_files() {
+# Function to find all possible shell configuration files
+find_shell_config_files() {
+    local shell_name=$(basename "$SHELL")
     local initial_files=(
+        "$HOME/.${shell_name}rc"
+        "$HOME/.profile"
+        "$HOME/.bashrc"
         "$HOME/.zshrc"
+        "$HOME/.bash_profile"
         "$HOME/.zprofile"
-        "$HOME/.zshenv"
-        "$HOME/.zlogin"
+        "$HOME/.bash_aliases"
+        "$HOME/.zsh_aliases"
+        "$HOME/.aliases"  # Common name for alias files without extension
+        "$HOME/.functions"  # Common name for function files without extension
+        "/etc/${shell_name}rc"
+        "/etc/profile"
     )
     
     local all_files=()
@@ -85,27 +112,19 @@ find_zsh_config_files() {
     printf '%s\n' "${all_files[@]}" | sort -u
 }
 
+# Function to replace home directory with ~
+replace_home_with_tilde() {
+    local home_path=$(eval echo ~)
+    echo "${1//$home_path/\~}"
+}
+
 # Function to find the source of an alias
 find_alias_source() {
     local alias_name=$1
-    local shell_name=$(basename "$SHELL")
-    local config_files=()
+    local config_files=($(find_shell_config_files))
 
     debug "Searching for alias: $alias_name"
-    debug "Current shell: $shell_name"
-
-    case "$shell_name" in
-        zsh)
-            config_files=($(find_zsh_config_files))
-            ;;
-        bash)
-            config_files=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
-            ;;
-        *)
-            echo "Unknown shell"
-            return
-            ;;
-    esac
+    debug "Current shell: $(basename "$SHELL")"
 
     for file in "${config_files[@]}"; do
         debug "Checking file: $file"
@@ -120,12 +139,6 @@ find_alias_source() {
     echo "Runtime defined or unknown source"
 }
 
-# Function to replace home directory with ~
-replace_home_with_tilde() {
-    local home_path=$(eval echo ~)
-    echo "${1//$home_path/\~}"
-}
-
 # Function to extract aliases and their location from active aliases
 extract_active_aliases() {
     local shell_name=$(basename "$SHELL")
@@ -133,17 +146,11 @@ extract_active_aliases() {
     debug "Extracting aliases for shell: $shell_name"
 
     # Source all possible config files
-    if [[ "$shell_name" == "zsh" ]]; then
-        local config_files=($(find_zsh_config_files))
-        for file in "${config_files[@]}"; do
-            debug "Sourcing file: $file"
-            source "$file" 2>/dev/null
-        done
-    else
-        source "$HOME/.bashrc" 2>/dev/null
-        source "$HOME/.bash_profile" 2>/dev/null
-        source "$HOME/.profile" 2>/dev/null
-    fi
+    local config_files=($(find_shell_config_files))
+    for file in "${config_files[@]}"; do
+        debug "Sourcing file: $file"
+        source "$file" 2>/dev/null
+    done
 
     # Use a temporary file to store alias output
     temp_file=$(mktemp)
