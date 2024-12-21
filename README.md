@@ -2,12 +2,6 @@
 
 **ali** is a lightweight shell utility to list all active aliases, display their corresponding commands, and show where they were defined. It works with both `bash` and `zsh` shells, and it automatically searches sourced files to identify the origin of aliases.
 
-## Features
-
-- Lists all active aliases with their commands.
-- Shows the source file where each alias is defined.
-- Truncates long commands for easier readability (with asterisk `*` to indicate truncation).
-- Recursively tracks aliases defined in sourced files up to 10 levels deep.
 
 ## Installation
 
